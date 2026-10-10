@@ -231,18 +231,26 @@ export function CameraExperience({ token }: { token: string }) {
     try {
       const max = 2560;
       const scale = Math.min(1, max / Math.max(video.videoWidth, video.videoHeight));
+      const width = Math.max(1, Math.round(video.videoWidth * scale));
+      const height = Math.max(1, Math.round(video.videoHeight * scale));
+      const source = document.createElement("canvas");
+      source.width = width;
+      source.height = height;
+      const sourceContext = source.getContext("2d");
+      if (!sourceContext) return;
+      if (facingRef.current === "user") {
+        sourceContext.translate(width, 0);
+        sourceContext.scale(-1, 1);
+      }
+      sourceContext.drawImage(video, 0, 0, width, height);
+
       const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
-      canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+      canvas.width = width;
+      canvas.height = height;
       const context2d = canvas.getContext("2d");
       if (!context2d) return;
-
       context2d.filter = filterCss(filterRef.current);
-      if (facingRef.current === "user") {
-        context2d.translate(canvas.width, 0);
-        context2d.scale(-1, 1);
-      }
-      context2d.drawImage(video, 0, 0, canvas.width, canvas.height);
+      context2d.drawImage(source, 0, 0);
 
       const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
       if (!blob) {
