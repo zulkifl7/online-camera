@@ -44,6 +44,97 @@ function filterCss(id: FilterId) {
   return FILTERS.find((filter) => filter.id === id)?.css ?? "none";
 }
 
+function clampByte(value: number) {
+  return Math.max(0, Math.min(255, value));
+}
+
+function bakeFilter(context: CanvasRenderingContext2D, id: FilterId) {
+  if (id === "original") return;
+  const { width, height } = context.canvas;
+  const image = context.getImageData(0, 0, width, height);
+  const data = image.data;
+  const steps = id === "eighties"
+    ? [contrast(1.2), saturate(1.65), hueRotate(325), brightness(1.06), sepia(0.08)]
+    : id === "polaroid"
+      ? [sepia(0.38), contrast(0.86), brightness(1.16), saturate(0.78)]
+      : [grayscale(1), contrast(1.15), brightness(1.02)];
+
+  for (let index = 0; index < data.length; index += 4) {
+    let red = data[index];
+    let green = data[index + 1];
+    let blue = data[index + 2];
+    for (const step of steps) {
+      [red, green, blue] = step(red, green, blue);
+    }
+    data[index] = clampByte(red);
+    data[index + 1] = clampByte(green);
+    data[index + 2] = clampByte(blue);
+  }
+
+  context.putImageData(image, 0, 0);
+}
+
+function brightness(amount: number) {
+  return (red: number, green: number, blue: number): [number, number, number] => [red * amount, green * amount, blue * amount];
+}
+
+function contrast(amount: number) {
+  return (red: number, green: number, blue: number): [number, number, number] => [
+    (red / 255 - 0.5) * amount * 255 + 127.5,
+    (green / 255 - 0.5) * amount * 255 + 127.5,
+    (blue / 255 - 0.5) * amount * 255 + 127.5,
+  ];
+}
+
+function saturate(amount: number) {
+  return (red: number, green: number, blue: number): [number, number, number] => {
+    const gray = red * 0.2126 + green * 0.7152 + blue * 0.0722;
+    return [gray + (red - gray) * amount, gray + (green - gray) * amount, gray + (blue - gray) * amount];
+  };
+}
+
+function grayscale(amount: number) {
+  return (red: number, green: number, blue: number): [number, number, number] => {
+    const gray = red * 0.2126 + green * 0.7152 + blue * 0.0722;
+    return [red + (gray - red) * amount, green + (gray - green) * amount, blue + (gray - blue) * amount];
+  };
+}
+
+function sepia(amount: number) {
+  return (red: number, green: number, blue: number): [number, number, number] => {
+    const nextRed = red * 0.393 + green * 0.769 + blue * 0.189;
+    const nextGreen = red * 0.349 + green * 0.686 + blue * 0.168;
+    const nextBlue = red * 0.272 + green * 0.534 + blue * 0.131;
+    return [
+      red + (nextRed - red) * amount,
+      green + (nextGreen - green) * amount,
+      blue + (nextBlue - blue) * amount,
+    ];
+  };
+}
+
+function hueRotate(degrees: number) {
+  const angle = (degrees * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const matrix = [
+    0.213 + cos * 0.787 - sin * 0.213,
+    0.715 - cos * 0.715 - sin * 0.715,
+    0.072 - cos * 0.072 + sin * 0.928,
+    0.213 - cos * 0.213 + sin * 0.143,
+    0.715 + cos * 0.285 + sin * 0.14,
+    0.072 - cos * 0.072 - sin * 0.283,
+    0.213 - cos * 0.213 - sin * 0.787,
+    0.715 - cos * 0.715 + sin * 0.715,
+    0.072 + cos * 0.928 + sin * 0.072,
+  ];
+  return (red: number, green: number, blue: number): [number, number, number] => [
+    red * matrix[0] + green * matrix[1] + blue * matrix[2],
+    red * matrix[3] + green * matrix[4] + blue * matrix[5],
+    red * matrix[6] + green * matrix[7] + blue * matrix[8],
+  ];
+}
+
 function coverSnapshot(video: HTMLVideoElement) {
   if (!video.videoWidth) return null;
   const size = 160;
@@ -236,7 +327,7 @@ export function CameraExperience({ token }: { token: string }) {
       const source = document.createElement("canvas");
       source.width = width;
       source.height = height;
-      const sourceContext = source.getContext("2d");
+      const sourceContext = source.getContext("2d", { willReadFrequently: true });
       if (!sourceContext) return;
       if (facingRef.current === "user") {
         sourceContext.translate(width, 0);
@@ -244,15 +335,9 @@ export function CameraExperience({ token }: { token: string }) {
       }
       sourceContext.drawImage(video, 0, 0, width, height);
 
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      const context2d = canvas.getContext("2d");
-      if (!context2d) return;
-      context2d.filter = filterCss(filterRef.current);
-      context2d.drawImage(source, 0, 0);
+      bakeFilter(sourceContext, filterRef.current);
 
-      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+      const blob = await new Promise<Blob | null>((resolve) => source.toBlob(resolve, "image/jpeg", 0.92));
       if (!blob) {
         setMessage("The photo could not be captured. Try again.");
         setStage("error");
